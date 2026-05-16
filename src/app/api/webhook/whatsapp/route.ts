@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAgentByWhatsApp, getConversationHistory, saveMessage } from '@/services/agentService';
 import { buildSystemPrompt } from '@/services/promptBuilder';
-import { anthropic } from '@/lib/anthropic';
+import { gemini } from '@/lib/gemini';
 import { twilioClient } from '@/lib/twilio';
 
 export async function POST(req: Request) {
@@ -38,27 +38,28 @@ export async function POST(req: Request) {
     // 3. Guardar el mensaje del usuario
     await saveMessage(agentId, conversationId, 'user', body);
 
-    // 4. Preparar Prompt y Llamada a Anthropic
+    // 4. Preparar Prompt y Llamada a Gemini
     const systemPrompt = buildSystemPrompt(agent.data);
     
-    const anthropicMessages: any[] = history.map((msg: any) => ({
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content
+    const geminiMessages = history.map((msg: any) => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
     }));
     
     // Agregar el mensaje actual
-    anthropicMessages.push({ role: 'user', content: body });
+    geminiMessages.push({ role: 'user', parts: [{ text: body }] });
 
     try {
-      const completion = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20240620', // Se usa la versión actual de Claude 3.5 Sonnet, que mapea con los capabilities de 4
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: anthropicMessages,
+      const completion = await gemini.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: geminiMessages,
+        config: {
+          systemInstruction: systemPrompt,
+        }
       });
 
       // Asegurarnos de que el texto viene en la respuesta
-      const responseContent = (completion.content[0] as any).text || '';
+      const responseContent = completion.text || '';
       
       // 5. Procesar etiquetas (Actions)
       let cleanResponse = responseContent;
@@ -101,7 +102,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true });
 
     } catch (llmError) {
-      console.error('Error llamando a Anthropic:', llmError);
+      console.error('Error llamando a Gemini:', llmError);
       await sendMessageViaTwilio(from, to, 'Disculpá, estoy teniendo problemas técnicos. Intentá de nuevo en un momento.');
       return NextResponse.json({ success: true });
     }
