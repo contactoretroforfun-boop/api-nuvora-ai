@@ -1,45 +1,70 @@
 # Contexto de Backend y Base de Datos (Nuvora Control Panel)
 
-Este documento detalla la estructura actual de datos y configuraciones en Firebase (Firestore & Storage) para el proyecto *Nuvora Control Panel*. Está diseñado como referencia técnica para el desarrollo de un backend externo (Node.js/Python) que deba procesar, interactuar o sincronizar los agentes configurados desde este frontend.
+Este documento detalla la estructura actual de datos y configuraciones en Firebase (Firestore & Storage) para el proyecto *Nuvora Control Panel*. Está diseñado como referencia técnica estricta para el backend externo (Node.js/Python) que procesa los agentes, interactúa con Twilio (WhatsApp) y Gemini.
+
+**Nota importante:** Se ha eliminado por completo cualquier dependencia o referencia a 360dialog y Claude API. El flujo es 100% Twilio + Gemini.
 
 ## 1. Estructura de Colecciones en Firestore
 
 El proyecto utiliza una base de datos NoSQL jerárquica con la siguiente estructura principal:
 
 ```text
+/clients (Collection - CRM)
+  └── /{clientId} (Document)
 /agents (Collection)
   ├── /{agentId} (Document)
-  │     └── /conversations (Sub-Collection - Planificada para logs)
+  │     └── /conversations (Sub-Collection)
   │           └── /{conversationId} (Document)
   └── /{agentId} (Document)
 ```
 
 ## 2. Esquema del Documento: `/agents/{agentId}`
 
-Cada agente configurado a través del Wizard genera un documento principal en la colección `agents`. El ID del documento (`agentId`) se genera automáticamente en el cliente con el formato `agt_{randomId}`.
+Cada agente configurado a través del Wizard genera un documento principal. El ID del documento (`agentId`) se genera automáticamente.
 
 **Ejemplo de Payload:**
 ```json
 {
   "id": "agt_xyz123",
-  "status": "draft", // Puede ser "draft" (borrador) o "active" (publicado)
-  "name": "Nombre del Negocio", // Usado para visualización en el Dashboard
+  "status": "published", // "draft", "published"
+  "name": "Nombre del Negocio",
   "client": "Nombre del Negocio",
-  "currentStep": 8, // Paso donde se quedó el usuario en el Wizard (1-10)
-  "updatedAt": 1715893200000, // Timestamp (Date.now())
+  "currentStep": 10,
+  "updatedAt": 1715893200000,
+  
+  // CONFIGURACIÓN DEL AGENTE (Prompts, Horarios, etc.)
   "data": {
-    // Aquí reside la carga útil completa del agente. (Ver sección 4)
+    "businessName": "Estética Lumina",
+    "industry": "Centro de Estética",
+    "location": "Pocitos, Montevideo",
+    "tone": "Cercano",
+    "schedule": [...],
+    "modules": { ... }
+  },
+
+  // CONFIGURACIÓN DE DEPLOYMENT Y TWILIO (NUEVO)
+  "sandboxConnection": {
+    "provider": "twilio",
+    "mode": "sandbox",
+    "active": true,
+    "connectedAt": 1715893200000
+  },
+  
+  "whatsappConnection": {
+    "provider": "twilio",
+    "mode": "production",
+    "phoneNumber": "+59899123456",
+    "status": "pending" // "pending", "active", "error"
   }
 }
 ```
 
 ## 3. Subcolección: `/agents/{agentId}/conversations`
 
-Aunque el Control Panel actual se enfoca en la configuración del agente, el backend externo deberá manejar el registro de los mensajes en tiempo real (por ejemplo, desde Twilio o 360dialog) para alimentar el Dashboard de Conversaciones.
+El backend gestiona el registro de los mensajes entrantes y salientes de Twilio para alimentar el Dashboard de Historial del panel.
 
-**Estructura esperada por el Frontend para visualización:**
+**Estructura esperada por el Frontend:**
 ```json
-// Ruta: /agents/{agentId}/conversations/{conversationId}
 {
   "conversationId": "conv_987654",
   "contactNumber": "+59899123456",
@@ -61,67 +86,42 @@ Aunque el Control Panel actual se enfoca en la configuración del agente, el bac
 }
 ```
 
-## 4. Estructura del objeto `data` (Configuración del Wizard)
+## 4. Lógica de Enrutamiento en el Backend (Twilio -> Agente)
 
-El campo `data` dentro del documento del agente es un mapa dinámico que recopila la configuración de los 10 pasos del Wizard. El backend deberá extraer esta información para construir el Prompt o System Message del LLM.
+Con la nueva actualización del Paso 10 del Wizard, existen dos flujos de conexión:
+
+### A) Testing con Sandbox Interno
+Cuando llega un Webhook a `https://api.nuvora.agency/api/webhook/whatsapp` desde el número oficial de Twilio Sandbox (`+1 415 523 8886`), el backend debe:
+1. Buscar en Firestore el agente que tenga `sandboxConnection.active == true`.
+2. Usar ESE agente (su prompt, reglas y conocimiento reales de Gemini) para responderle al usuario.
+3. Esto permite al equipo interno probar al 100% el agente antes de conectarle un número real.
+
+### B) Producción con Número Real
+Cuando el cliente brinda su número, se registra en `whatsappConnection.phoneNumber`. 
+El backend recibe el Webhook desde ese número de producción (ej. `+598 99...`) y debe:
+1. Buscar en Firestore el agente donde `whatsappConnection.phoneNumber` coincida con el destinatario (`To`).
+2. Operar el agente de forma normal.
+
+## 5. Colección: `/clients/{clientId}` (NUEVO CRM)
+
+El área de Clientes almacena a las empresas que pagan la mensualidad de Nuvora.
 
 ```json
-"data": {
-  // PASO 1: Datos Básicos
-  "businessName": "Estética Lumina",
-  "industry": "Centro de Estética",
-  "location": "Pocitos, Montevideo",
-  "whatsappNumber": "+59899123456",
-  "schedule": [
-    { "day": "Lunes", "open": true, "start": "09:00", "end": "18:00" },
-    { "day": "Domingo", "open": false, "start": "00:00", "end": "00:00" }
-  ],
-  "tone": "Cercano",
-
-  // PASO 7: Identidad (UI Widget)
-  "color": "#8b5cf6",
-  "position": "right",
-  "logoUrl": "https://firebasestorage.googleapis.com/v0/b/nuvora-demo.appspot.com/o/agents%2Fagt_xyz123%2Flogo.png",
-
-  // PASO 8: Módulos Avanzados (Habilitados por Toggle)
-  "modules": {
-    "reviews": {
-      "enabled": true,
-      "delayValue": 45,
-      "delayUnit": "Minutos",
-      "messages": {
-        "initial": "¡Hola {{nombre}}! ¿Cómo te fue con tu {{servicio}}?",
-        "followup": "¿Podrías contarnos un poco más?"
-      },
-      "sentimentStrictness": 70,
-      "platforms": {
-        "google": "https://g.page/review/...",
-        "tripadvisor": ""
-      }
-    },
-    "scheduling": {
-      "enabled": true,
-      "platform": "cal", // "cal" | "calendly"
-      "link": "https://cal.com/estetica-lumina",
-      "notifyTeam": true,
-      "notificationNumber": "+59899000111"
-    },
-    "tracking": {
-      "enabled": true,
-      "tabs": { ... } // Leads / Retención
-    }
-  }
-  
-  // Nota: Otros pasos (2, 3, 4, 5) alimentan directamente este mismo objeto 'data'
-  // con claves similares según los inputs del frontend.
+{
+  "id": "cli_xyz",
+  "name": "Estética Lumina",
+  "contact": "María Fernández",
+  "email": "correo@estetica.com",
+  "phone": "+59899123456",
+  "nextPayment": "2026-06-10",
+  "status": "activo", // "activo", "suspendido"
+  "createdAt": 1715893200000
 }
 ```
 
-## 5. Variables y Configuraciones de Firebase
+## 6. Variables y Configuraciones de Firebase
 
-El Frontend se conecta a Firebase utilizando las siguientes variables de entorno. El Backend debe utilizar estas mismas credenciales (o un Service Account vinculado al mismo proyecto) para tener acceso de lectura/escritura a la colección `agents`.
-
-**Variables inyectadas en Frontend (`.env.local`):**
+**Variables inyectadas (`.env.local`):**
 ```env
 NEXT_PUBLIC_FIREBASE_API_KEY="..."
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="..."
@@ -131,11 +131,7 @@ NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="..."
 NEXT_PUBLIC_FIREBASE_APP_ID="..."
 ```
 
-**Firebase Storage:**
-Las imágenes subidas (Logos) en el Paso 7 se almacenan bajo la ruta:
-`gs://{STORAGE_BUCKET}/agents/{agentId}/logo.{ext}`
+## 7. Transición de Estado de Publicación
 
-## 6. Integración Externa & Mock Mode (Fallback Local)
-
-- **Modo Híbrido:** El Frontend actual posee un fallback a `localStorage` llamado "Mock Mode". Si el Backend nota que faltan datos en Firebase durante pruebas iniciales, puede deberse a que el usuario interactuó sin credenciales de Firebase configuradas, guardándose bajo las claves `draft_{agentId}` en el navegador.
-- **Transición de Estado:** Cuando el usuario llega al Paso 10 (Despliegue) y hace clic en "Publicar", el campo `status` del documento pasará de `"draft"` a `"active"`. El Backend debe suscribirse (usando `onSnapshot` o Webhooks) a los documentos cuyo status cambie a "active" para inicializar la conexión con Twilio/WhatsApp API.
+- Cuando el usuario finaliza el Wizard en el Control Panel y hace clic en "Publicar Agente", el campo `status` del agente pasará a `"published"`.
+- El Backend debe estar preparado para escuchar (mediante listeners o validando dinámicamente) estos cambios de estado para saber qué agentes están aptos para responder en producción.

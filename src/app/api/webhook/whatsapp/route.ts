@@ -29,6 +29,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true }); // Retornar 200 a Twilio siempre
     }
 
+    // Validación de status published (Excepto si es sandbox test)
+    if (agent.status !== 'published' && cleanToNumber !== '+14155238886') {
+      console.warn(`Agent ${agent.id} is not published yet.`);
+      await sendMessageViaTwilio(from, to, 'El asistente virtual de este negocio aún no está publicado.');
+      return NextResponse.json({ success: true });
+    }
+
     const agentId = agent.id;
     const conversationId = cleanFromNumber;
 
