@@ -1,5 +1,5 @@
 import { NextResponse, NextRequest } from 'next/server';
-import { verifyFirebaseIdToken } from './lib/auth';
+import { verifyFirebaseIdToken } from './lib/auth-edge';
 
 /**
  * Rutas que requieren validación de JWT (privadas del panel)
