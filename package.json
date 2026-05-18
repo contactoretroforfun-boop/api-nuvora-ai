@@ -10,6 +10,7 @@
   "dependencies": {
     "@google/genai": "^2.3.0",
     "firebase-admin": "^13.10.0",
+    "jose": "^6.2.3",
     "next": "16.2.6",
     "twilio": "^6.0.2"
   },
