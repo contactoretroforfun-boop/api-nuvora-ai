@@ -246,4 +246,137 @@ export async function verifyFirebaseIdToken(token: string) {
 ```
 Si la validación es correcta, las Claims del usuario (incluyendo su `uid` y `role` asignado) se extraen directamente de la firma del payload con confianza absoluta del 100%.
 
+---
 
+## 11. AI Business Operating System (AI OS) Schema Additions & Prompt Compiler Refactor
+
+Con la evolución del Wizard hacia un "AI Business Operating System", se han incorporado campos y motores lógicos avanzados al objeto `data` en Firestore dentro del documento `/agents/{agentId}`.
+
+### A) Nuevas Estructuras de Datos en Firestore (`data`)
+
+Las siguientes propiedades se guardan ahora de forma síncrona desde el Frontend:
+
+```json
+{
+  "data": {
+    // ... campos básicos anteriores (businessName, industry, location, schedule, tone) ...
+
+    // 1. PERSONALIDAD DINÁMICA SEGÚN CONTEXTO (Step 2)
+    "dynamicPersonality": {
+      "ventas": { "style": "persuasivo", "instruction": "Enfócate en beneficios, escasez y llamado al cierre." },
+      "soporte": { "style": "explicativo", "instruction": "Sé paciente, claro y usa listas viñeteadas." },
+      "reclamo": { "style": "calmado", "instruction": "Valida sentimientos, discúlapate y ofrece derivar." },
+      "followUp": { "style": "motivacional", "instruction": "Recuerda el valor del servicio de forma amigable." }
+    },
+
+    // 2. MOTOR DE INTENCIONES (Step 4)
+    "intentEngine": [
+      {
+        "name": "consulta_precio",
+        "triggers": "precio, costo, cotizar, cuanto sale",
+        "action": "pedir_datos", // "responder_directo" | "intentar_cierre" | "derivar_humano" | "pedir_datos"
+        "priority": "alta"       // "baja" | "media" | "alta"
+      }
+    ],
+
+    // 3. MOTOR DE DECISIONES SIMPLE (Step 4)
+    "ruleEngine": [
+      {
+        "ifCondition": "usuario nuevo + pide precio",
+        "thenAction": "cta_whatsapp" // "respuesta_especifica" | "cta_whatsapp" | "derivacion"
+      }
+    ],
+
+    // 4. CONTROL DE ESTILO DE VENTA (Step 4)
+    "salesStyle": {
+      "pressure": "medio",     // "bajo" | "medio" | "alto"
+      "proactivity": "guiado",  // "reactivo" | "guiado" | "agresivo"
+      "style": "consultivo"     // "consultivo" | "vendedor" | "asistente"
+    },
+
+    // 5. MÓDULOS AVANZADOS ACTIVOS (Step 8)
+    "activeModules": {
+      "agendamiento": true,
+      "seguimiento": true,
+      "resenas": false,
+      "aprendizaje": true,
+      "objeciones": true,
+      "segmentacion": true,
+      "horarios": true
+    },
+
+    // 6. MANEJO DE OBJECIONES (Step 8)
+    "objecionesConfig": {
+      "objections": [
+        {
+          "trigger": "es caro",
+          "reply": "Entiendo tu preocupación, sin embargo nuestro servicio cuenta con garantía...",
+          "style": "persuasivo",
+          "action": "ofrecer_alternativa"
+        }
+      ]
+    },
+
+    // 7. SEGMENTACIÓN & CRM LIGHT (Step 8)
+    "segmentacionConfig": {
+      "segments": {
+        "nuevo": { "style": "calido", "strategy": "Educación y presentación de la marca." },
+        "alto_valor": { "style": "exclusivo", "strategy": "Beneficios VIP inmediatos." },
+        "indeciso": { "style": "persuasivo", "strategy": "Testimonios y flexibilidades." },
+        "en_riesgo": { "style": "empatico", "strategy": "Ofrecer descuento de retención." }
+      },
+      "crmAutomaticTagging": true
+    },
+
+    // 8. HORARIOS INTELIGENTES (Step 8)
+    "horariosConfig": {
+      "conversionHours": "18:00 a 21:00",
+      "contactRule": "ofrecer_turno_inmediato" // "ofrecer_turno_inmediato" | "calificar_primero" | "enviar_link"
+    },
+
+    // 9. CAPTURA DE RESEÑAS DETALLADA (Step 8)
+    "resenasConfig": {
+      "delayValue": 2,
+      "delayUnit": "Semanas",
+      "allowedHoursStart": "10:00",
+      "allowedHoursEnd": "20:00",
+      "sondeoMessage": "¡Hola {{nombre}}! ¿Qué tal te resultó el servicio de {{servicio}} de hoy?",
+      "useSecondarySondeo": false,
+      "secondarySondeoMessage": "Entiendo. Nos ayuda mucho saber tu opinión sincera, ¿hubo algo que podríamos haber hecho mejor?",
+      "satisfactionThreshold": 70,
+      "reviewMessage": "¡Qué alegría {{nombre}}! Nos ayuda un montón si nos dejás unas estrellitas acá, lleva solo 10 segundos:",
+      "googleReviewsUrl": "https://g.page/r/...",
+      "alternativeUrl": "",
+      "resendReview": false,
+      "resendReviewDelay": 24,
+      "disconformeAction": "Ambas",
+      "ownerWhatsapp": "",
+      "empathyMessage": "Uy, mil disculpas {{nombre}}. Ya mismo le paso este comentario a los encargados...",
+      "notificationFields": ["Nombre del cliente", "Servicio", "Fecha", "Resumen de la queja", "Acción sugerida"],
+      "maxRequests": 3,
+      "minDays": 60,
+      "neverAskAgain": true
+    }
+  }
+}
+```
+
+### B) Lógica de Procesamiento en Backend (`messageProcessor.ts` & Gemini Compiler)
+
+Para soportar este comportamiento jerárquico de forma 100% robusta en el backend externo en Vercel, el compilador del System Prompt del agente debe implementarse de manera estructurada en **9 Niveles de Prioridad** (evitando conflictos y alucinaciones):
+
+1. **Nivel 1 (Hard Rules):** Reglas absolutas e inviolables de comportamiento, etiquetas ocultas de derivación (`[ACTION:HANDOFF]`), y restricciones de WhatsApp.
+2. **Nivel 2 (Contexto del Negocio):** Nombre comercial, industria, catálogo de productos/servicios y horarios de atención estándar.
+3. **Nivel 3 (Psicología Dinámica & Sales Controller):** Tono general, instrucciones personalizadas de tono y el objeto `dynamicPersonality` mapeando la respuesta del bot al contexto detectado. Inyección del estilo de ventas (`pressure`, `proactivity`, `style`).
+4. **Nivel 4 (Intent Engine):** Mapeo de intenciones para que la IA clasifique las keywords del usuario en caliente y gatille los flujos estructurados de acción (`action`, `priority`).
+5. **Nivel 5 (Decision Rule Engine):** Reglas condicionales IF/THEN de negocio (ej. usuarios nuevos versus recurrentes).
+6. **Nivel 6 (Objections Engine):** Argumentos comerciales estructurados. Si el usuario objeta el precio o tiempo, el bot inyecta la contra-respuesta persuasiva pre-definida.
+7. **Nivel 7 (CRM & Client Segmentations):** Estrategias de conversión según la clasificación del contacto.
+8. **Nivel 8 (Horarios Inteligentes):** Variación de la proactividad según el rango de conversión de la hora de recepción.
+9. **Nivel 9 (APIs & Actions):** Integración de enlaces dinámicos de agenda (Cal.com) y reseñas de Google Maps.
+
+### C) Sincronización del CRM Light del Cliente (`/conversations`)
+
+Cuando el `messageProcessor.ts` interactúa con el cliente final por WhatsApp, debe actualizar automáticamente el estado y las etiquetas del cliente dentro de su documento de conversación en Firestore:
+* **`status`:** `"active"` | `"resolved"` | `"handed_off"`.
+* **`tags` (Automáticos):** Si el mensaje del usuario gatilló una intención (ej: `consulta_precio`), el backend debe agregar el tag `"pidio_precio"` o `"interesado_en_servicio"` al array de tags del contacto en Firestore para alimentar el mini-CRM del panel.

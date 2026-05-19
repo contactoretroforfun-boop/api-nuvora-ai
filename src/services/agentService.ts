@@ -90,3 +90,62 @@ export async function saveMessage(agentId: string, conversationId: string, role:
       status: 'active'
     }, { merge: true });
 }
+
+/**
+ * Actualiza el CRM de la conversación (tags, status y nombre del contacto) usando transacciones
+ * para evitar colisiones y race conditions en Firestore.
+ */
+export async function updateConversationCRM(
+  agentId: string,
+  conversationId: string,
+  updates: {
+    tags?: string[];
+    status?: 'active' | 'resolved' | 'handed_off';
+    contactName?: string;
+    reviewState?: 'sondeo_sent' | 'completed' | 'complaint_registered';
+  }
+) {
+  const db = getDb();
+  const docRef = db
+    .collection('agents')
+    .doc(agentId)
+    .collection('conversations')
+    .doc(conversationId);
+
+  await db.runTransaction(async (transaction) => {
+    const doc = await transaction.get(docRef);
+    let currentTags: string[] = [];
+    
+    if (doc.exists) {
+      currentTags = doc.data()?.tags || [];
+    }
+
+    const mergedTags = [...currentTags];
+    if (updates.tags) {
+      updates.tags.forEach((tag) => {
+        const cleanTag = tag.trim().toLowerCase();
+        if (cleanTag && !mergedTags.includes(cleanTag)) {
+          mergedTags.push(cleanTag);
+        }
+      });
+    }
+
+    const dataToSet: any = {
+      tags: mergedTags,
+      lastMessageAt: Date.now(),
+    };
+
+    if (updates.status) {
+      dataToSet.status = updates.status;
+    }
+    if (updates.contactName) {
+      dataToSet.contactName = updates.contactName;
+    }
+    if (updates.reviewState) {
+      dataToSet.reviewState = updates.reviewState;
+    }
+
+    transaction.set(docRef, dataToSet, { merge: true });
+  });
+}
+
